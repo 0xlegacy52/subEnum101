@@ -31,6 +31,10 @@ TIMEOUT_DURATION=300  # Default 5 minutes per tool
 CONFIG_FILE=""
 INTERACTIVE_MODE=false
 
+# HTTPX rate limiting (VPN-friendly settings)
+HTTPX_THREADS="${HTTPX_THREADS:-25}"
+HTTPX_RATE_LIMIT="${HTTPX_RATE_LIMIT:-50}"
+
 # Tool categories
 RUN_PASSIVE=true
 RUN_ACTIVE=false
@@ -118,7 +122,18 @@ Configuration:
   API keys should be set as environment variables (see setup.sh)
   Or use a configuration file with -c option
 
-Note: v3.0 - Enhanced with error handling, resume capability, and multiple output formats
+Rate Limiting & VPN Considerations:
+  This tool uses httpx for probing live hosts with VPN-friendly throttling:
+    - Default threads: 25 (set HTTPX_THREADS to customize)
+    - Default rate limit: 50 req/sec (set HTTPX_RATE_LIMIT to customize)
+  
+  Example with custom throttling:
+    HTTPX_THREADS=10 HTTPX_RATE_LIMIT=20 $0 -d example.com
+  
+  Consider using a VPN to avoid IP-based rate limiting or blocks.
+  To suppress the VPN warning: touch ~/.nokiddie
+
+Note: v3.1 - Enhanced with VPN-friendly httpx rate limiting and throttling controls
 EOF
     exit 0
 }
@@ -371,6 +386,26 @@ check_network_connectivity() {
     
     log_verbose "Network connectivity OK"
     return 0
+}
+
+check_vpn_warning() {
+    if [ ! -f "$HOME/.nokiddie" ]; then
+        log_warning "VPN/Rate Limiting Notice:"
+        echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║${NC} This tool makes aggressive HTTP requests to discover hosts.  ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC} Consider using a VPN to avoid rate limiting/IP blocks.        ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC}                                                                ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC} Current httpx throttling settings:                            ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC}   - Threads: ${HTTPX_THREADS} (adjustable)                              ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC}   - Rate Limit: ${HTTPX_RATE_LIMIT}/sec (adjustable)                        ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC}                                                                ${YELLOW}║${NC}"
+        echo -e "${YELLOW}║${NC} To dismiss this warning, create: touch ~/.nokiddie            ${YELLOW}║${NC}"
+        echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        
+        read -p "Press Enter to continue or Ctrl+C to abort..." -r
+        echo ""
+    fi
 }
 
 #############################################################
@@ -1075,7 +1110,7 @@ js_analysis() {
     # Probe live hosts first
     log_info "Probing for live hosts..."
     if check_command httpx; then
-        httpx -l "$all_subs" -silent -o "$js_dir/live_hosts.txt"
+        httpx -l "$all_subs" -silent -threads ${HTTPX_THREADS:-25} -rate-limit ${HTTPX_RATE_LIMIT:-50} -o "$js_dir/live_hosts.txt"
     fi
     
     if [ ! -f "$js_dir/live_hosts.txt" ] || [ ! -s "$js_dir/live_hosts.txt" ]; then
@@ -1116,7 +1151,7 @@ aggregate_results() {
     # Probe live subdomains
     if check_command httpx; then
         log_info "Probing live web services..."
-        httpx -l "$final_dir/all_subdomains.txt" -silent -mc 200,301,302,403 -o "$final_dir/live_web.txt"
+        httpx -l "$final_dir/all_subdomains.txt" -silent -threads ${HTTPX_THREADS:-25} -rate-limit ${HTTPX_RATE_LIMIT:-50} -mc 200,301,302,403 -o "$final_dir/live_web.txt"
         local live_count=$(wc -l < "$final_dir/live_web.txt")
         log_success "Live web services: $live_count"
     fi
@@ -1189,6 +1224,9 @@ cleanup() {
 
 main() {
     print_banner
+    
+    # Check for VPN warning (early check)
+    check_vpn_warning
     
     # Set up signal handlers for graceful shutdown
     trap cleanup SIGINT SIGTERM
